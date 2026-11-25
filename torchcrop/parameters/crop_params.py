@@ -850,6 +850,36 @@ class CropParameters:
     thermally sensitive window closes."""
 
     # ------------------------------------------------------------------ #
+    # Excess-wetness penalty on grain yield (`WetStressOnGrain`). torchcrop
+    # only — SIMPLACE has no counterpart. Off by default: with
+    # ``wet_penalty_slope = 0`` the factor is exactly zero.
+    # ------------------------------------------------------------------ #
+
+    wet_rain_threshold: torch.Tensor = field(default_factory=lambda: _t(1.0))
+    """Daily precipitation [mm d⁻¹] above which a day counts as wet."""
+
+    wet_rain_ramp: torch.Tensor = field(default_factory=lambda: _t(0.5))
+    """Width [mm d⁻¹] of the logistic step at `wet_rain_threshold`."""
+
+    wet_begin_devstage: torch.Tensor = field(default_factory=lambda: _t(0.6))
+    """Development stage [-] at which the wet-sensitive window opens
+    (around heading)."""
+
+    wet_end_devstage: torch.Tensor = field(default_factory=lambda: _t(1.3))
+    """Development stage [-] at which the wet-sensitive window closes
+    (early grain fill)."""
+
+    wet_fraction_critical: torch.Tensor = field(default_factory=lambda: _t(0.3))
+    """Wet-day fraction [-] of the window above which yield is penalised."""
+
+    wet_penalty_slope: torch.Tensor = field(default_factory=lambda: _t(0.0))
+    """Yield penalty per unit wet-day fraction above
+    `wet_fraction_critical` [-]. ``0`` disables the penalty."""
+
+    wet_penalty_max: torch.Tensor = field(default_factory=lambda: _t(0.5))
+    """Upper limit [-] of the wet-stress yield penalty."""
+
+    # ------------------------------------------------------------------ #
     # Init-only inputs (not stored as fields)
     # ------------------------------------------------------------------ #
 

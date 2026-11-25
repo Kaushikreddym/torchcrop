@@ -38,6 +38,7 @@ from torchcrop.processes import (
     StemDynamics,
     StressFactors,
     WaterBalance,
+    WetStressOnGrain,
 )
 from torchcrop.states.model_state import DiagnosticState, ModelState
 
@@ -64,11 +65,15 @@ class ModelOutput:
             factor ``HSF`` in ``[0, 1]`` from `HeatStressOnGrain`, shape
             ``[B]``. Computed once over the full trajectory, not a
             per-day series.
-        adjusted_yield: Heat-stress-adjusted yield
-            ``period_ended · (1 − HSF) · yield_`` [g m⁻²], shape ``[B]``.
+        adjusted_yield: Stress-adjusted yield
+            ``period_ended · (1 − HSF) · (1 − WSF) · yield_`` [g m⁻²], shape
+            ``[B]``.
             Equals ``0`` until the DVS trajectory exits the anthesis
             window (``max(DVS) > grain_heat_end_devstage``), matching
             SIMPLACE ``pPeriodEnded`` gating.
+        wet_stress_factor: Excess-wetness penalty ``WSF`` from
+            `WetStressOnGrain`, shape ``[B]``; ``0`` unless
+            ``wet_penalty_slope > 0``.
     """
 
     states: list[ModelState]
@@ -80,6 +85,7 @@ class ModelOutput:
     biomass: torch.Tensor
     heat_stress_factor: torch.Tensor
     adjusted_yield: torch.Tensor
+    wet_stress_factor: torch.Tensor
 
 
 class Lintul5Model(nn.Module):
@@ -157,6 +163,7 @@ class Lintul5Model(nn.Module):
         self.nutrient_demand = NutrientDemand()
         self.soil_nutrients = SoilNutrients()
         self.heat_stress_grain = HeatStressOnGrain()
+        self.wet_stress_grain = WetStressOnGrain()
         self.stress = stress_module or StressFactors()
 
         self.hybrid = HybridManager(residual_specs)
@@ -382,6 +389,10 @@ class Lintul5Model(nn.Module):
             params=self.crop_params,
             yield_=yield_,
         )
+        wsg = self.wet_stress_grain(
+            rain=weather.channel("rain"), dvs=dvs[:, 1:], params=self.crop_params
+        )
+        wet_stress_factor = wsg["wet_stress_factor"]
 
         return ModelOutput(
             states=states,
@@ -392,7 +403,8 @@ class Lintul5Model(nn.Module):
             dvs=dvs,
             biomass=biomass,
             heat_stress_factor=hsg["heat_stress_factor"],
-            adjusted_yield=hsg["adjusted_yield"],
+            adjusted_yield=hsg["adjusted_yield"] * (1.0 - wet_stress_factor),
+            wet_stress_factor=wet_stress_factor,
         )
 
     # ------------------------------------------------------------------ #

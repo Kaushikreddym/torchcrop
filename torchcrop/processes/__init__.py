@@ -18,6 +18,7 @@ from torchcrop.processes.soil_nutrients import SoilNutrients
 from torchcrop.processes.stem_dynamics import StemDynamics
 from torchcrop.processes.stress import StressFactors
 from torchcrop.processes.water_balance import WaterBalance
+from torchcrop.processes.wet_stress import WetStressOnGrain
 
 __all__ = [
     "Astro",
@@ -36,4 +37,5 @@ __all__ = [
     "StemDynamics",
     "StressFactors",
     "WaterBalance",
+    "WetStressOnGrain",
 ]
