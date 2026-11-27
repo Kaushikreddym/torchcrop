@@ -108,16 +108,41 @@ $$
 \\begin{aligned}
 \\text{PERC} &= (1 - \\text{RUNFR})\\cdot \\text{RAIN} + \\text{RIRR},\\\\
 \\text{PERC1P} &= \\text{PERC} - E_a - T_a,\\\\
-\\text{PERC1} &= \\min(\\text{KSUB} + \\text{CAP}_0,\\ \\text{PERC1P}),\\\\
+K_d &= f_d\\cdot\\text{KSUB},\\qquad K_p = \\min(\\text{KSUB}, K_d),\\\\
+\\text{PERC1} &= \\min\\!\\big(\\text{CAP}_0 + \\min(\\text{KSUB},\\ K_p +
+\\text{CAP}_{\\ell,0}),\\ \\text{PERC1P}\\big),\\\\
 \\text{RUNOFF} &= \\text{RUNFR}\\cdot \\text{RAIN} + (\\text{PERC1P}
 - \\text{PERC1})_+,\\\\
 \\text{PERC2} &= \\mathbb{1}_{\\text{CAP}\\le \\text{PERC1}}\\cdot
-\\min(\\text{KSUB} + \\text{CAP}_{\\ell,0},\\ (\\text{PERC1} -
+\\min(K_p + \\text{CAP}_{\\ell,0},\\ (\\text{PERC1} -
 \\text{CAP})_+),\\\\
 \\text{PERC3} &= \\mathbb{1}_{\\text{CAP}_\\ell\\le \\text{PERC2}}\\cdot
-\\min(\\text{KSUB},\\ (\\text{PERC2} - \\text{CAP}_\\ell)_+).
+\\min(K_d,\\ (\\text{PERC2} - \\text{CAP}_\\ell)_+).
 \\end{aligned}
 $$
+
+``f_d`` is the drainage impedance ``drain_factor``. With ``f_d = 1`` the
+cascade is the LINTUL-5 one; below ``1`` the subsoil passes on less than
+``KSUB``, the lower zone saturates and the excess backs up into the rooted
+zone as a perched water table — the condition `Waterlogging` responds to.
+Neither zone can exceed saturation: what neither accepts becomes
+saturation-excess runoff.
+
+Under impedance (``f_d < 1``) water already stored above field capacity also
+drains every day, dry days included — the cascade above only routes the
+day's input:
+
+$$
+\\begin{aligned}
+d_2 &= \\min\\!\\big((W_a' - W_{a,fc})_+,\\ (K_p - \\text{PERC2})_+,\\
+(W_{\\ell,sat} - W_{\\ell}')_+ + (K_d - \\text{PERC3})_+\\big),\\\\
+d_3 &= \\min\\!\\big((K_d - \\text{PERC3})_+,\\ (W_{\\ell}' + d_2 -
+W_{\\ell,fc})_+\\big),
+\\end{aligned}
+$$
+
+with ``W'`` the zone stores after the cascade, added to ``PERC3`` and
+``PERC2``.
 
 State rates (forward Euler, ``dt = 1`` d):
 
@@ -447,21 +472,55 @@ class WaterBalance(nn.Module):
         capl = torch.clamp(params.wcfc - smactl, min=0.0) * factor * rd_lower
         capl0 = torch.clamp(params.wcst - smactl, min=0.0) * factor * rd_lower
 
+        # Impeded bottom drainage: the lower zone passes on at most ``kdrain``
+        # and so accepts at most ``kdrain + CAP_l0``; the rooted zone in turn
+        # accepts at most what it can hand down plus its own headroom. Anything
+        # more backs up as a perched water table and then saturation-excess
+        # runoff. With ``drain_factor = 1`` every cap equals the LINTUL-5 one.
+        kdrain = params.ksub * params.drain_factor
+        kpass = torch.minimum(params.ksub + torch.zeros_like(kdrain), kdrain)
         perc1p = perc - evap - tran
-        perc1 = torch.minimum(params.ksub + cap0, perc1p)
+        perc1 = torch.minimum(cap0 + torch.minimum(params.ksub, kpass + capl0), perc1p)
         extra_runoff = torch.clamp(perc1p - perc1, min=0.0)
         runoff = runofp + extra_runoff
 
         perc2_candidate = torch.minimum(
-            params.ksub + capl0, torch.clamp(perc1 - cap, min=0.0)
+            kpass + capl0, torch.clamp(perc1 - cap, min=0.0)
         )
         perc2 = torch.where(cap <= perc1, perc2_candidate, torch.zeros_like(perc1))
 
         perc3_candidate = torch.minimum(
-            params.ksub + torch.zeros_like(perc2),
+            kdrain + torch.zeros_like(perc2),
             torch.clamp(perc2 - capl, min=0.0),
         )
         perc3 = torch.where(capl <= perc2, perc3_candidate, torch.zeros_like(perc2))
+
+        # 8b. Stored free water drains through an impeding layer every day.
+        # The LINTUL-5 cascade only routes the *day's* input, so water already
+        # held above field capacity never leaves on a dry day. Under free
+        # drainage that store is ~never built; under impedance it is the
+        # perched water table itself, and without this term a wet December
+        # would stay saturated until spring ET removed it. Lower zone first
+        # (its outlet is ``K_d``), then the rooted zone into the room that
+        # leaves (its outlet is ``K_p``). The lower zone accepts what it can
+        # store *or pass on* — once roots fill the profile it is a 1e-4 m
+        # sliver with no storage, and its outlet is all there is. Mass-
+        # conserving; off at ``drain_factor = 1``, so the free-draining
+        # cascade is untouched.
+        impeded = params.drain_factor < 1.0
+        wa1 = state.wa + perc1 - perc2 + wdr
+        wl1 = state.wa_lower + perc2 - perc3 - wdr
+        c3 = torch.clamp(kdrain - perc3, min=0.0)
+        room_l = torch.clamp(factor * params.wcst * rd_lower - wl1, min=0.0)
+        free_r = torch.clamp(wa1 - factor * params.wcfc * rootd, min=0.0)
+        d2 = torch.minimum(
+            torch.minimum(free_r, torch.clamp(kpass - perc2, min=0.0)), room_l + c3
+        )
+        d3 = torch.minimum(
+            c3, torch.clamp(wl1 + d2 - factor * params.wcfc * rd_lower, min=0.0)
+        )
+        perc2 = perc2 + torch.where(impeded, d2, torch.zeros_like(d2))
+        perc3 = perc3 + torch.where(impeded, d3, torch.zeros_like(d3))
 
         # ---------------------------------------------------------------- #
         # 9. Rate variables

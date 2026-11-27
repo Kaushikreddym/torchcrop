@@ -234,6 +234,10 @@ class ModelState:
     # ``rr_prev_rate``; starts at 0 (no transfer on the first emerged day).
     rr_prev: torch.Tensor = field(default=None)  # [B] m d-1 — lagged root-front velocity
 
+    # Waterlogging injury index [-] in ``[0, 1]`` (`Waterlogging`). Persists
+    # after the soil drains and multiplies growth by ``1 − wl_damage``.
+    wl_damage: torch.Tensor = field(default=None)
+
     @classmethod
     def initial(
         cls,
@@ -354,6 +358,7 @@ class ModelState:
             klosss=zeros.clone(),
             sown=zeros.clone(),
             rr_prev=zeros.clone(),
+            wl_damage=zeros.clone(),
         )
 
     def replace(self, **updates: Any) -> "ModelState":
@@ -465,6 +470,11 @@ class DiagnosticState:
     ## Partitioning fractions [-]:
     - `fr`, `fl`, `fs`, `fo`: Stress-modified fractions to root, leaf,
         stem and storage organ. Root + above-ground sum to 1.
+
+    ## Waterlogging [-]:
+    - `wl_index`: Root-zone aeration index ``x`` in ``[0, 1]``.
+    - `wl_factor`: Growth multiplier ``1 − wl_damage``.
+    - `denit`: Mineral-N denitrification [g N m⁻² d⁻¹].
     """
 
     # Stress factors
@@ -516,6 +526,11 @@ class DiagnosticState:
     fl: torch.Tensor
     fs: torch.Tensor
     fo: torch.Tensor
+
+    # Waterlogging
+    wl_index: torch.Tensor
+    wl_factor: torch.Tensor
+    denit: torch.Tensor
 
     def stack(self) -> torch.Tensor:
         """Stack all tensor fields into a single ``[B, C]`` tensor.

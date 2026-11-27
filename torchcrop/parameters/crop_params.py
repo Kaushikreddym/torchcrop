@@ -433,6 +433,47 @@ class CropParameters:
     air ducts in its roots (=1, e.g. rice → tolerates waterlogging) or
     not (=0). Stored as float for batch broadcasting."""
 
+    # Waterlogging injury (`torchcrop.processes.waterlogging.Waterlogging`).
+    # Unlike ``RWET``, which only throttles the day's transpiration, this is
+    # a persistent injury (root death, tiller loss) that keeps cutting growth
+    # after the soil has drained.
+
+    wl_damage_rate: torch.Tensor = field(default_factory=lambda: _t(0.0))
+    """Waterlogging injury per anoxic degree-day [(°C d)⁻¹]: one degree-day
+    above ``wl_tbase`` at full root-zone anoxia and full stage sensitivity
+    adds this much to the injury index ``WLD``. ``0`` (default) disables the
+    injury."""
+
+    wl_tbase: torch.Tensor = field(default_factory=lambda: _t(0.0))
+    """Base temperature [°C] of waterlogging injury. Root and microbial
+    oxygen demand collapse in cold soil, so winter waterlogging below this
+    temperature does no damage."""
+
+    wl_recovery: torch.Tensor = field(default_factory=lambda: _t(0.02))
+    """Relative recovery rate [d⁻¹] of the injury index on aerated days
+    (root regrowth); ``0.02`` is a ~35-day half-life."""
+
+    wlsenstb: torch.Tensor = field(
+        default_factory=lambda: _table(
+            [(0.0, 0.5), (0.4, 1.0), (1.0, 1.0), (1.5, 0.5), (2.0, 0.0)]
+        )
+    )
+    """Waterlogging sensitivity [-] vs development stage. Wheat is most
+    sensitive from stem elongation to anthesis and least during late grain
+    fill (Malik et al. 2002; de San Celedonio et al. 2014)."""
+
+    wl_rdr_amp: torch.Tensor = field(default_factory=lambda: _t(0.0))
+    """Acceleration of leaf senescence by the injury index [-]: the leaf
+    relative death rate is multiplied by ``1 + wl_rdr_amp · WLD`` (root death
+    and N loss yellow the canopy). Acts through the same ``RDR`` multiplier as
+    leaf heat stress, so leaf mass and LAI die together. ``0`` (default)
+    disables it."""
+
+    wl_root_arrest: torch.Tensor = field(default_factory=lambda: _t(0.0))
+    """Fraction [0–1] of root-front advance stopped at full root-zone anoxia:
+    ``RR · (1 − wl_root_arrest · x)``. Roots do not extend into saturated
+    soil. ``0`` (default) disables it."""
+
     cfet: torch.Tensor = field(default_factory=lambda: _t(1.0))
     """``cCFET``. Crop-specific empirical correction factor [-] applied to
     the Penman transpiration rate (canopy-resistance proxy)."""

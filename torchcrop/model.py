@@ -38,6 +38,7 @@ from torchcrop.processes import (
     StemDynamics,
     StressFactors,
     WaterBalance,
+    Waterlogging,
 )
 from torchcrop.states.model_state import DiagnosticState, ModelState
 
@@ -148,6 +149,7 @@ class Lintul5Model(nn.Module):
         self.evapotranspiration = PotentialEvapoTranspiration()
         self.co2_transpiration = Co2Transpiration()
         self.water_balance = WaterBalance()
+        self.waterlogging = Waterlogging()
         self.photosynthesis = Photosynthesis()
         self.partitioning = Partitioning()
         self.leaf_dynamics = LeafDynamics()
@@ -593,6 +595,17 @@ class Lintul5Model(nn.Module):
         tranrf = self.hybrid.correct("water.tranrf", water["tranrf"], feats)
         feats["tranrf"] = tranrf
 
+        # 4a. Waterlogging injury and denitrification, from the rooted-zone
+        #     aeration the water balance just computed (inert by default).
+        wlog = self.waterlogging(
+            state=state,
+            smact=water["smact"],
+            davtmp=davtmp,
+            emerg=emerg,
+            crop_params=crop_params,
+            soil_params=soil_params,
+        )
+
         # 4b. Sowing latch. ``sown`` is 1 from the sowing day
         #     (``doy >= site.idpl``) onward and never resets; the
         #     ``max(state.sown, ...)`` makes it robust to day-of-year
@@ -669,7 +682,12 @@ class Lintul5Model(nn.Module):
             max=1.0,
         )
         combined_stress = self.stress(tranrf, npkref)
-        gtotal = photo["rue"] * photo["rtmco"] * parint_mj * combined_stress
+        # Waterlogging injury multiplies after the law of the minimum: it is
+        # tissue damage, not a resource limitation competing with TRANRF/NPKREF.
+        gtotal = (
+            photo["rue"] * photo["rtmco"] * parint_mj * combined_stress
+            * wlog["wl_factor"]
+        )
 
         # Optional neural residual correction on ``gtotal`` — the highest-
         # leverage hybridisation point, where all carbon enters the plant.
@@ -730,7 +748,8 @@ class Lintul5Model(nn.Module):
             tranrf=tranrf,
             nstress=nstress,
             params=crop_params,
-            heat_stress=leaf_heat,
+            # Waterlogging injury shares the RDR multiplier slot (1 when inert).
+            heat_stress=leaf_heat * wlog["rdr_factor"],
             hybrid=self.hybrid,
             features=feats,
         )
@@ -800,11 +819,12 @@ class Lintul5Model(nn.Module):
             "rootd_rate": state.rr_prev,
             # Latch the same-day velocity into ``rr_prev`` for the next day's
             # water balance and rooting-depth growth (``rr_prev_{t+1} = rr_t``).
-            "rr_prev_rate": water["rr"] - state.rr_prev,
+            "rr_prev_rate": water["rr"] * wlog["rr_factor"] - state.rr_prev,
             "wa_rate": water["wa_rate"],
             "wa_lower_rate": water["wa_lower_rate"],
             "dslr_rate": water["dslr_rate"],
             "dsos_rate": water["dsos_rate"],
+            "wl_damage_rate": gate(wlog["wl_damage_rate"]),
             "anlv_rate": gate(nut["n_lv_rate"] - rnldlv),
             "anst_rate": gate(nut["n_st_rate"] - rnldst),
             "anrt_rate": gate(nut["n_rt_rate"] - rnldrt),
@@ -838,7 +858,7 @@ class Lintul5Model(nn.Module):
             "nmin_rate": soil_nut["nmin_rate"],
             "pmin_rate": soil_nut["pmin_rate"],
             "kmin_rate": soil_nut["kmin_rate"],
-            "nmint_rate": soil_nut["nmint_rate"],
+            "nmint_rate": soil_nut["nmint_rate"] - wlog["denit"],
             "pmint_rate": soil_nut["pmint_rate"],
             "kmint_rate": soil_nut["kmint_rate"],
             "tran_cum_rate": water["tran"],
@@ -971,6 +991,9 @@ class Lintul5Model(nn.Module):
             fl=part["fl"],
             fs=part["fs"],
             fo=part["fo"],
+            wl_index=wlog["wl_index"],
+            wl_factor=torch.broadcast_to(wlog["wl_factor"], b_shape),
+            denit=wlog["denit"],
         )
 
         return rates, diagnostic

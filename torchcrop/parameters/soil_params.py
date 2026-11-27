@@ -88,6 +88,19 @@ class SoilParameters:
     """``cKSUB``. Maximum percolation rate [mm d⁻¹] from the lower zone
     to deeper soil layers (sub-surface drainage)."""
 
+    drain_factor: torch.Tensor = field(default_factory=lambda: _t(1.0))
+    """Drainage impedance [0–1] at the bottom of the profile. Deep drainage
+    out of the lower zone is capped at ``drain_factor · KSUB`` and the lower
+    zone accepts no more than it can pass on, so a value below ``1`` builds a
+    perched water table that backs up into the rooted zone — the hydromorphic
+    (slowly permeable subsoil) case that drives `Waterlogging`. ``1``
+    (default) reproduces the LINTUL-5 cascade exactly."""
+
+    kdenit: torch.Tensor = field(default_factory=lambda: _t(0.0))
+    """Denitrification rate [d⁻¹] of soil mineral N (``NMINT``) under full
+    root-zone anoxia at 20 °C, scaled by the `Waterlogging` aeration index
+    and a ``Q10 = 2`` temperature response. ``0`` (default) disables it."""
+
     runfr: torch.Tensor = field(default_factory=lambda: _t(0.0))
     """``cRUNFR``. Average fraction [0–1] of incoming precipitation lost
     to surface runoff."""
